@@ -83,14 +83,17 @@ class Authentication(Keys):
 
 
 class Validation(Keys):
-    def build(self, root, arch='x86_64', names=publish.PACKAGES):
+    def build(self, root, arch='x86_64', names=publish.PACKAGES, ipe_crt=None):
         """A signed native build as provenance.py lays it out."""
         version = LOCK['version'] + '-r1'
         directory = root / ('linux-werewolf-' + arch)
         (directory / arch).mkdir(parents=True)
         stanzas = []
         for name in sorted(names):
-            payload = member({'boot/file': name.encode()})
+            files = {'boot/file': name.encode()}
+            if name == 'linux-werewolf':
+                files['boot/ipe.crt'] = (ROOT / 'release/ipe.crt').read_bytes() if ipe_crt is None else ipe_crt
+            payload = member(files)
             info = f'pkgname = {name}\npkgver = {version}\narch = {arch}\ndatahash = '
             info += __import__('hashlib').sha256(payload).hexdigest() + '\n'
             control = self.signed(member({'.PKGINFO': info.encode()}))
@@ -128,6 +131,11 @@ class Validation(Keys):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, 'exactly'):
                 self.validate(self.build(Path(directory), names={'linux-werewolf'}))
+
+    def test_a_test_kernel_trusting_another_ipe_certificate_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'test kernel'):
+                self.validate(self.build(Path(directory), ipe_crt=b'disposable certificate'))
 
     def test_a_build_signed_by_an_ephemeral_key_fails(self):
         with tempfile.TemporaryDirectory() as directory:

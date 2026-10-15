@@ -33,29 +33,6 @@ def recipe(lock, tools, arch):
     return text
 
 
-def guest(build, scratch, melange, arch, env):
-    """Melange's QEMU guest needs 9p and overlayfs, which our kernel leaves out:
-    boot Werewolf's Alpine build kernel, its modules appended under usr/lib."""
-    kernel, modules = build / 'vmlinuz', build / 'kernel/x/lib/modules'
-    if not kernel.is_file() or not modules.is_dir():
-        raise SystemExit(f'build: {build}: expected vmlinuz and kernel/x/lib/modules; set WEREWOLF_BUILD')
-    base, image = scratch / ('base-' + arch + '.cpio'), scratch / ('guest-' + arch + '.cpio')
-    subprocess.run([melange, 'initramfs', '--arch', arch, '--output', str(base)], check=True, env=env)
-    names = ['lib/modules'] + [str(p.relative_to(modules.parent.parent)) for p in sorted(modules.rglob('*'))
-                               if not p.is_symlink()]
-    (scratch / 'modules.list').write_text('\n'.join(names) + '\n')
-    with image.open('wb') as output:
-        output.write(base.read_bytes())
-        # Prefix usr/: replacing /lib would destroy the guest loader's symlink.
-        subprocess.run(['bsdtar', '--format', 'newc', '--uid', '0', '--gid', '0', '--numeric-owner',
-                        '-s', ',^lib/,usr/lib/,', '-cf', '-', '--no-recursion', '-T', str(scratch / 'modules.list')],
-                       cwd=modules.parent.parent, stdout=output, check=True)
-    base.unlink()
-    env.update(QEMU_KERNEL_IMAGE=str(kernel), QEMU_BASE_INITRAMFS=str(image), QEMU_DISKS_PATH=str(scratch))
-    env.pop('QEMU_KERNEL_MODULES', None)
-    return {'guest_kernel_sha256': sha256(kernel), 'guest_initramfs_sha256': sha256(image)}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--arch', default=platform.machine())
@@ -73,14 +50,27 @@ def main():
         source, target = ROOT / name, context / 'werewolf' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         (shutil.copytree if source.is_dir() else shutil.copyfile)(source, target)
+    # A test kernel trusts a disposable certificate for IPE policies; the
+    # publisher refuses any kernel that does not trust release/ipe.crt.
+    if os.environ.get('IPE_CRT'):
+        shutil.copyfile(os.environ['IPE_CRT'], context / 'werewolf/release/ipe.crt')
+        print('build: test kernel: IPE trusts', os.environ['IPE_CRT'], 'not release/ipe.crt', flush=True)
     (build / 'linux.yaml').write_text(recipe(lock, pins['toolchain'], arch))
     for directory in (packages, scratch, empty):
         directory.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(scratch))
     runner = 'bubblewrap' if platform.system() == 'Linux' and shutil.which('bwrap') else 'qemu'
-    record = {'runner': runner, 'arch': arch, 'melange_version': pins['melange']['version']}
+    record = {'runner': runner, 'arch': arch, 'melange_version': pins['melange']['version'],
+              'ipe_cert_sha256': sha256(context / 'werewolf/release/ipe.crt')}
     if runner == 'qemu':
-        record.update(guest(Path(os.environ.get('WEREWOLF_BUILD', 'unset')).resolve(), scratch, melange, arch, env))
+        # Melange's guest needs 9p and overlayfs, which our kernel leaves out.
+        guest = [Path(env.get(name, '')) for name in ('QEMU_KERNEL_IMAGE', 'QEMU_BASE_INITRAMFS')]
+        if not all(path.is_file() for path in guest):
+            raise SystemExit('build: QEMU needs QEMU_KERNEL_IMAGE and QEMU_BASE_INITRAMFS; see README.md')
+        record.update(guest_kernel_sha256=sha256(guest[0]), guest_initramfs_sha256=sha256(guest[1]))
+        env['QEMU_DISKS_PATH'] = str(scratch)
+        # Melange would put modules under the guest's /lib, over its loader's link.
+        env.pop('QEMU_KERNEL_MODULES', None)
     common = ['--runner', runner, '--arch', arch, '--cpu', env.get('MELANGE_CPU', '4'),
               '--memory', env.get('MELANGE_MEMORY', '8Gi'), '--repository-append', 'https://packages.wolfi.dev/os',
               '--keyring-append', 'https://packages.wolfi.dev/os/wolfi-signing.rsa.pub']

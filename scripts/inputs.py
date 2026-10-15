@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INPUTS = ROOT / 'build/inputs'
 LOCK = 'kernel.lock.json'
 ARCHES = ('x86_64', 'aarch64')
-POLICY_INPUTS = ['Makefile', 'requirements.txt', 'tools.lock.json', 'policy.json',
+POLICY_INPUTS = ['Makefile', 'linux.yaml', 'tools.lock.json', 'policy.json',
                  'scripts', 'tests', 'config', 'boot', 'release', '.github/workflows']
 
 

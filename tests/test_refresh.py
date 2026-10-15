@@ -119,6 +119,13 @@ class Identity(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertNotEqual(first, inputs.identity(dict(lock, **change)))
 
+    def test_everything_the_build_reads_is_an_input(self):
+        hashed = inputs.policy_hashes()
+        for name in ('linux.yaml', 'tools.lock.json', 'policy.json', 'config/common.cfg', 'config/deny.cfg',
+                     'config/x86_64.config', 'boot/probe.c', 'release/ipe.crt', 'scripts/build.py'):
+            with self.subTest(name=name):
+                self.assertIn(name, hashed)
+
     def test_a_changed_policy_file_needs_a_new_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -55,12 +55,19 @@ the config, `kernel-package` and the IPE certificate) and `linux-werewolf-probe`
 probe as an initramfs. The package test boots the kernel with the probe as PID 1 and
 requires a `PASS` line: release `-werewolf`, no module loader, lockdown
 `confidentiality`, exactly the LSMs werewolf names, Landlock ABI 10, no io_uring,
-BPF, kexec or user namespaces, IPE refusing code written after boot.
+BPF, kexec or user namespaces, IPE enforcing and refusing any key but werewolf's.
 
 On Linux with bubblewrap the build uses the runner werewolf CI uses. On macOS Melange
-needs a guest kernel with 9p and overlayfs, which ours lacks:
-`WEREWOLF_BUILD=../werewolf/build/aarch64 make build` boots werewolf's Alpine build
-kernel with its modules.
+boots a guest kernel with 9p and overlayfs, which ours lacks. Melange's
+`QEMU_KERNEL_IMAGE` and `QEMU_BASE_INITRAMFS` name it; werewolf's howl makes one from
+Alpine's linux-virt for any Melange build on macOS:
+
+    QEMU_KERNEL_IMAGE=../werewolf/build/vendor/melange-guest-aarch64.vmlinuz \
+    QEMU_BASE_INITRAMFS=../werewolf/build/vendor/melange-guest-aarch64.cpio make build
+
+`IPE_CRT=test.crt make build` builds a test kernel whose IPE trusts `test.crt` in place
+of `release/ipe.crt`; werewolf's `tools/test-kernel` builds its IPE tests' kernels so.
+`scripts/publish.py` refuses a test kernel.
 
 GitHub Actions checks kernel.org hourly. A release whose inputs are unpublished builds
 natively on x86_64 and aarch64; both must boot the probe before

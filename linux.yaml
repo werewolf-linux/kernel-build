@@ -7,7 +7,7 @@ package:
   version: "@VERSION@"
   epoch: @REVISION@
   description: Linux for werewolf virtual machines, every option named in config/
-  url: https://github.com/werewolf-linux/kernel
+  url: https://github.com/werewolf-linux/kernel-build
   copyright:
     - license: GPL-2.0-only
   resources:
@@ -32,6 +32,7 @@ environment:
       - gzip
       - lld-22=@LLD@
       - llvm-22=@LLVM@
+      - openssl
       - openssl-dev
       - perl
       - python3
@@ -65,7 +66,6 @@ pipeline:
       # Out of tree: the workspace is also $HOME, where ~/.config may exist.
       mkdir out
       cp werewolf/release/ipe.crt out/ipe.crt
-      cp werewolf/boot/ipe-boot.policy out/ipe-boot.policy
       # allnoconfig again, not olddefconfig: an option the committed config does
       # not name stays off here too, whatever this toolchain makes visible.
       make O=out ARCH=$karch LLVM=1 KCONFIG_ALLCONFIG=$PWD/werewolf/config/${{build.arch}}.config allnoconfig
@@ -103,8 +103,15 @@ subpackages:
           clang -Os -static -nostdlib -nostdinc -fno-asynchronous-unwind-tables -Wall -Wextra -Werror \
             -I tools/include/nolibc -I out/usr/include -fuse-ld=lld -o probe werewolf/boot/probe.c
           clang -O2 -o gen_init_cpio usr/gen_init_cpio.c
+          # A well-formed policy signed by a key the kernel does not trust: IPE must refuse it.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=untrusted -keyout untrusted.key \
+            -out untrusted.crt
+          printf 'policy_name=untrusted policy_version=0.0.1\nDEFAULT action=ALLOW\n' > untrusted.policy
+          openssl smime -sign -binary -md sha256 -in untrusted.policy -signer untrusted.crt \
+            -inkey untrusted.key -noattr -nodetach -nosmimecap -outform DER -out untrusted.p7b
           printf '%s\n' 'dir /dev 0755 0 0' 'nod /dev/console 0600 0 0 c 5 1' 'dir /proc 0755 0 0' \
-            'dir /sys 0755 0 0' 'dir /tmp 1777 0 0' 'file /init probe 0755 0 0' > probe.list
+            'dir /sys 0755 0 0' 'file /init probe 0755 0 0' \
+            'file /untrusted.p7b untrusted.p7b 0444 0 0' > probe.list
           ./gen_init_cpio -t 0 probe.list | gzip -9n > probe.cpio.gz
           install -Dm644 probe.cpio.gz "${{targets.subpkgdir}}/usr/share/linux-werewolf/probe.cpio.gz"
 

@@ -39,13 +39,6 @@ static long new_user_namespace(void)
 	return syscall(__NR_unshare, CLONE_NEWUSER);
 }
 
-static long run_copy(void)
-{
-	char *argv[] = { "/tmp/copy", NULL };
-
-	return execve(argv[0], argv, NULL);
-}
-
 /* The start of a file, as a string; empty if it cannot be read. */
 static const char *slurp(const char *path)
 {
@@ -60,20 +53,23 @@ static const char *slurp(const char *path)
 	return buf;
 }
 
-/* Copy this program to tmpfs: native code IPE's boot policy must refuse. */
-static int copy_self(const char *to)
+/* Offer IPE a policy signed by a key it does not trust; it must refuse it. */
+static int untrusted_policy_refused(void)
 {
-	char buf[4096];
+	static char buf[8192];
 	ssize_t n;
-	int in = open("/init", O_RDONLY), out = open(to, O_WRONLY | O_CREAT | O_EXCL, 0755);
+	int in = open("/untrusted.p7b", O_RDONLY), out;
 
-	if (in < 0 || out < 0)
+	if (in < 0)
 		return 0;
-	while ((n = read(in, buf, sizeof(buf))) > 0)
-		if (write(out, buf, n) != n)
-			return 0;
+	n = read(in, buf, sizeof(buf));
 	close(in);
-	return close(out) == 0 && n == 0;
+	out = open("/sys/kernel/security/ipe/new_policy", O_WRONLY);
+	if (n <= 0 || out < 0)
+		return 0;
+	n = write(out, buf, n);
+	close(out);
+	return n == -1 && (errno == ENOKEY || errno == EKEYREJECTED);
 }
 
 int main(void)
@@ -81,12 +77,9 @@ int main(void)
 	struct utsname u = { 0 };
 	size_t n;
 
-	if (getpid() != 1)
-		return 2;	/* a copy IPE wrongly ran */
 	mount("proc", "/proc", "proc", 0, NULL);
 	mount("sysfs", "/sys", "sysfs", 0, NULL);
 	mount("securityfs", "/sys/kernel/security", "securityfs", 0, NULL);
-	mount("tmpfs", "/tmp", "tmpfs", 0, NULL);
 
 	n = uname(&u) == 0 ? strlen(u.release) : 0;
 	check("release ends in -werewolf", n > 9 && strcmp(u.release + n - 9, "-werewolf") == 0);
@@ -103,8 +96,10 @@ int main(void)
 	check("no bpf", refused(syscall(__NR_bpf, 0, NULL, 0), ENOSYS));
 	check("no kexec", refused(syscall(__NR_kexec_file_load, -1, -1, 0, "", 0), ENOSYS));
 	check("no user namespaces", refused_in_child(new_user_namespace, EINVAL));
-	check("IPE refuses code written after boot",
-	      copy_self("/tmp/copy") && refused_in_child(run_copy, EACCES));
+	check("IPE enforces, with no policy until stage0 loads one",
+	      strcmp(slurp("/sys/kernel/security/ipe/enforce"), "1") == 0 &&
+	      open("/sys/kernel/security/ipe/policies/werewolf_boot", O_RDONLY) < 0);
+	check("IPE refuses a policy signed by any other key", untrusted_policy_refused());
 	check("running config is readable", open("/proc/config.gz", O_RDONLY) >= 0);
 
 	printf("probe: %s %s\n", failed ? "FAIL" : "PASS", u.release);

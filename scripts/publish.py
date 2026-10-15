@@ -137,6 +137,9 @@ def validate(directory, arch, lock, source_sha):
             raise ValueError('publish: ' + apk.name + ' says it is something else')
         if len(parts) != 3 or fields['datahash'] != hashlib.sha256(parts[2][0]).hexdigest():
             raise ValueError('publish: ' + apk.name + ' payload does not match its signed hash')
+        if fields['pkgname'] == 'linux-werewolf' and \
+                contents(parts[2][1]).get('boot/ipe.crt') != (ROOT / 'release/ipe.crt').read_bytes():
+            raise ValueError('publish: ' + apk.name + ' is a test kernel: IPE trusts another certificate')
     return record
 
 

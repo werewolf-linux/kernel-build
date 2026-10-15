@@ -7,9 +7,8 @@ on:
     branches: [main]
 permissions:
   contents: read
-concurrency:
-  group: publish-latest-kernel
-  cancel-in-progress: false
+# A newer run, from a commit or the schedule, cancels an older one's builds: they would
+# be of outdated inputs. A publish that has begun always finishes, one at a time.
 jobs:
   discover:
     runs-on: ubuntu-26.04
@@ -44,6 +43,9 @@ jobs:
           if-no-files-found: error
   build:
     needs: discover
+    concurrency:
+      group: kernel-build-${{ github.ref }}
+      cancel-in-progress: true
     if: needs.discover.outputs.state == 'build'
     uses: ./.github/workflows/build.yml
     with:
@@ -52,6 +54,9 @@ jobs:
     secrets: inherit
   publish:
     needs: [discover, build]
+    concurrency:
+      group: kernel-publish
+      cancel-in-progress: false
     if: >-
       always() && !cancelled() && needs.discover.result == 'success' &&
       (needs.build.result == 'success' || needs.discover.outputs.state == 'publish')

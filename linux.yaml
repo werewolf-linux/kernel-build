@@ -1,0 +1,143 @@
+# linux-werewolf: werewolf's kernel, every option named in config/.
+# scripts/build.py fills the fields between @ signs from build/inputs/kernel.lock.json
+# and tools.lock.json, and puts this repository's config, boot and scripts in
+# werewolf/ beside the kernel source.
+package:
+  name: linux-werewolf
+  version: "@VERSION@"
+  epoch: @REVISION@
+  description: Linux for werewolf virtual machines, every option named in config/
+  url: https://github.com/werewolf-linux/kernel
+  copyright:
+    - license: GPL-2.0-only
+  resources:
+    cpu: "4"
+    memory: 8Gi
+
+environment:
+  contents:
+    packages:
+      - bash
+      - bc
+      - bison
+      - build-base
+      - busybox
+      - clang-22=@CLANG@
+      # The kernel's scripts expect GNU date, find, cmp and diff, not BusyBox's.
+      - coreutils
+      - diffutils
+      - elfutils-dev
+      - findutils
+      - flex
+      - gzip
+      - lld-22=@LLD@
+      - llvm-22=@LLVM@
+      - openssl-dev
+      - perl
+      - python3
+      - zstd
+
+vars:
+  # kernel.org's release date: the build's timestamp, the same in every build.
+  released: "@RELEASED@"
+
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://cdn.kernel.org/pub/linux/kernel/v@MAJOR@.x/linux-${{package.version}}.tar.xz
+      expected-sha256: "@SHA256@"
+
+  - name: Configure exactly the committed config
+    runs: |
+      export PATH=/usr/lib/llvm-22/bin:$PATH
+      case ${{build.arch}} in
+        x86_64) karch=x86 ;;
+        aarch64) karch=arm64 ;;
+      esac
+      # Anonymous W^X is PID 1's PR_SET_MDWE (dropped only for a form that
+      # declares allow: [jit]); IPE judges file-backed execution.
+      hooks=security/ipe/hooks.c
+      sed -i 's/if (prot & PROT_EXEC) {/if (f \&\& (prot \& PROT_EXEC)) {/' $hooks
+      new='if (vma->vm_file \&\& (prot \& PROT_EXEC)) {'
+      sed -i "/ipe_file_mprotect/,/^}/s/if (f && (prot & PROT_EXEC)) {/$new/" $hooks
+      grep -q 'if (f && (prot & PROT_EXEC))' $hooks
+      grep -q 'if (vma->vm_file && (prot & PROT_EXEC))' $hooks
+      # Out of tree: the workspace is also $HOME, where ~/.config may exist.
+      mkdir out
+      cp werewolf/release/ipe.crt out/ipe.crt
+      cp werewolf/boot/ipe-boot.policy out/ipe-boot.policy
+      # allnoconfig again, not olddefconfig: an option the committed config does
+      # not name stays off here too, whatever this toolchain makes visible.
+      make O=out ARCH=$karch LLVM=1 KCONFIG_ALLCONFIG=$PWD/werewolf/config/${{build.arch}}.config allnoconfig
+      python3 werewolf/scripts/config.py same --arch ${{build.arch}} out/.config
+      python3 werewolf/scripts/config.py check --arch ${{build.arch}} out/.config
+
+  - name: Build and install the kernel
+    runs: |
+      export PATH=/usr/lib/llvm-22/bin:$PATH
+      case ${{build.arch}} in
+        x86_64) karch=x86 image=arch/x86/boot/bzImage ;;
+        aarch64) karch=arm64 image=arch/arm64/boot/Image ;;
+      esac
+      export KBUILD_BUILD_TIMESTAMP="${{vars.released}} 00:00:00 UTC"
+      export KBUILD_BUILD_USER=werewolf KBUILD_BUILD_HOST=werewolf KBUILD_BUILD_VERSION=${{package.epoch}}
+      make O=out ARCH=$karch LLVM=1 -j$(nproc) ${image##*/}
+      release=$(make -s O=out ARCH=$karch LLVM=1 kernelrelease)
+      test "$release" = "${{package.version}}-werewolf"
+      install -Dm644 out/$image "${{targets.destdir}}/boot/vmlinuz-werewolf"
+      install -Dm644 out/.config "${{targets.destdir}}/boot/config-$release"
+      install -Dm644 out/ipe.crt "${{targets.destdir}}/boot/ipe.crt"
+      printf 'linux-werewolf-%s\n' "${{package.full-version}}" > "${{targets.destdir}}/boot/kernel-package"
+
+subpackages:
+  - name: linux-werewolf-probe
+    description: The boot probe this kernel passed, as an initramfs
+    pipeline:
+      - runs: |
+          export PATH=/usr/lib/llvm-22/bin:$PATH
+          case ${{build.arch}} in
+            x86_64) karch=x86 ;;
+            aarch64) karch=arm64 ;;
+          esac
+          make O=out ARCH=$karch LLVM=1 headers
+          clang -Os -static -nostdlib -nostdinc -fno-asynchronous-unwind-tables -Wall -Wextra -Werror \
+            -I tools/include/nolibc -I out/usr/include -fuse-ld=lld -o probe werewolf/boot/probe.c
+          clang -O2 -o gen_init_cpio usr/gen_init_cpio.c
+          printf '%s\n' 'dir /dev 0755 0 0' 'nod /dev/console 0600 0 0 c 5 1' 'dir /proc 0755 0 0' \
+            'dir /sys 0755 0 0' 'dir /tmp 1777 0 0' 'file /init probe 0755 0 0' > probe.list
+          ./gen_init_cpio -t 0 probe.list | gzip -9n > probe.cpio.gz
+          install -Dm644 probe.cpio.gz "${{targets.subpkgdir}}/usr/share/linux-werewolf/probe.cpio.gz"
+
+test:
+  environment:
+    contents:
+      packages:
+        - busybox
+        - linux-werewolf-probe=${{package.full-version}}
+        - qemu-system-@ARCH@
+  pipeline:
+    - name: The package holds the kernel werewolf images expect
+      runs: |
+        release=${{package.version}}-werewolf
+        test -s /boot/vmlinuz-werewolf
+        test "$(cat /boot/kernel-package)" = "linux-werewolf-${{package.full-version}}"
+        grep -qx 'CONFIG_LOCALVERSION="-werewolf"' "/boot/config-$release"
+        grep -qx '# CONFIG_MODULES is not set' "/boot/config-$release"
+        test ! -e "/lib/modules/$release"
+    - name: Boot the kernel with the probe as its only process
+      runs: |
+        case ${{build.arch}} in
+          x86_64) machine=q35 console=ttyS0 ;;
+          aarch64) machine=virt,gic-version=3 console=ttyAMA0 ;;
+        esac
+        # werewolf's fixed command line, as every form boots it.
+        werewolf='debugfs=off proc_mem.force_override=never slab_nomerge page_alloc.shuffle=1'
+        accel=tcg cpu=max
+        if [ -w /dev/kvm ]; then accel=kvm cpu=host; fi
+        timeout 600 qemu-system-${{build.arch}} -machine $machine -accel $accel -cpu $cpu \
+          -smp 2 -m 1024 -nographic -no-reboot -kernel /boot/vmlinuz-werewolf \
+          -initrd /usr/share/linux-werewolf/probe.cpio.gz \
+          -append "console=$console rdinit=/init panic=-1 $werewolf" \
+          | tee boot.log
+        grep -q 'probe: PASS ' boot.log
+        ! grep -q 'probe: FAIL' boot.log

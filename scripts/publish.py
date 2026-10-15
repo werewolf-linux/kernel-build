@@ -164,7 +164,9 @@ def validate(directory, arch, lock, source_sha):
 def published():
     """The kernels in the stable repository machines follow, as (version, revision)."""
     try:
-        with urllib.request.urlopen(PUBLIC + ARCHES[0] + '/APKINDEX.tar.gz', timeout=60) as response:
+        # Cloudflare, in front of R2, refuses Python's own User-Agent.
+        request = urllib.request.Request(PUBLIC + ARCHES[0] + '/APKINDEX.tar.gz', headers={'User-Agent': notes.AGENT})
+        with urllib.request.urlopen(request, timeout=60) as response:
             data = response.read()
     except urllib.error.HTTPError as error:
         if error.code == 404:

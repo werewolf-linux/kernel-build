@@ -196,8 +196,9 @@ class Publication(Validation):
         with tempfile.TemporaryDirectory() as directory:
             index = (self.build(Path(directory)) / 'x86_64/APKINDEX.tar.gz').read_bytes()
         with patch.object(publish, 'TRUST', self.public), \
-                patch.object(publish.urllib.request, 'urlopen', return_value=io.BytesIO(index)):
+                patch.object(publish.urllib.request, 'urlopen', return_value=io.BytesIO(index)) as opened:
             self.assertEqual({((7, 2, 11), 1)}, publish.published())
+        self.assertEqual(publish.notes.AGENT, opened.call_args[0][0].get_header('User-agent'))
         missing = publish.urllib.error.HTTPError('u', 404, 'Not Found', {}, None)
         with patch.object(publish.urllib.request, 'urlopen', side_effect=missing):
             self.assertEqual(set(), publish.published())

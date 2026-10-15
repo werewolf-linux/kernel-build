@@ -8,7 +8,7 @@ You need Python 3, OpenSSL, GnuPG and xz. To change a list you also need clang 2
 later, `ld.lld` and GNU make 4 (`brew install llvm lld make` on macOS).
 
 ```sh
-make refresh    # capture kernel.org's newest stable release
+make refresh    # capture kernel.org's newest stable release of our series
 make check      # both configs hold the lists; every unit test, in seconds
 make config     # after editing config/*.cfg: derive both full configs again
 make build      # build, sign and boot the kernel with Melange

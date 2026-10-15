@@ -83,7 +83,7 @@ class Authentication(Keys):
 
 
 class Validation(Keys):
-    def build(self, root, arch='x86_64', names=publish.PACKAGES, ipe_crt=None):
+    def build(self, root, arch='x86_64', names=publish.PACKAGES, ipe_crt=None, verdict='PASS'):
         """A signed native build as provenance.py lays it out."""
         version = LOCK['version'] + '-r1'
         directory = root / ('linux-werewolf-' + arch)
@@ -103,6 +103,7 @@ class Validation(Keys):
             self.signed(member({'APKINDEX': ('\n\n'.join(stanzas) + '\n').encode()})))
         (directory / 'werewolf-packages.rsa.pub').write_bytes(self.public.read_bytes())
         (directory / 'linux.yaml').write_text('recipe')
+        (directory / 'probe.log').write_text(f'probe: ok no module loader\nprobe: {verdict} 7.2.11-werewolf\n')
         record = {'build_id': LOCK['build_id'], 'arch': arch, 'version': version, 'source_sha': '1' * 40,
                   'sha256': {str(p.relative_to(directory)): publish.sha256(p)
                              for p in sorted(directory.rglob('*')) if p.is_file()}}
@@ -132,6 +133,11 @@ class Validation(Keys):
             with self.assertRaisesRegex(ValueError, 'exactly'):
                 self.validate(self.build(Path(directory), names={'linux-werewolf'}))
 
+    def test_a_build_without_a_passing_probe_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'no passing probe'):
+                self.validate(self.build(Path(directory), verdict='FAIL'))
+
     def test_a_test_kernel_trusting_another_ipe_certificate_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, 'test kernel'):
@@ -159,7 +165,8 @@ class Publication(Validation):
             for apk in (built / arch).glob('*.apk'):
                 names.append(publish.asset(apk.name, arch))
                 (assets / names[-1]).write_bytes(apk.read_bytes())
-        self.manifest(assets, names)
+        (assets / 'NOTES.md').write_text('# notes\n')
+        self.manifest(assets, names + ['NOTES.md'])
         return assets
 
     def manifest(self, assets, names):
@@ -178,6 +185,16 @@ class Publication(Validation):
             publish.publish(assets, LOCK, 'build-x', key=self.private)
         return uploaded
 
+    def test_the_stable_repository_lists_its_kernels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            index = (self.build(Path(directory)) / 'x86_64/APKINDEX.tar.gz').read_bytes()
+        with patch.object(publish, 'TRUST', self.public), \
+                patch.object(publish.urllib.request, 'urlopen', return_value=io.BytesIO(index)):
+            self.assertEqual({((7, 2, 11), 1)}, publish.published())
+        missing = publish.urllib.error.HTTPError('u', 404, 'Not Found', {}, None)
+        with patch.object(publish.urllib.request, 'urlopen', side_effect=missing):
+            self.assertEqual(set(), publish.published())
+
     def test_github_and_r2_carry_the_same_apks(self):
         with tempfile.TemporaryDirectory() as directory:
             assets = self.draft(Path(directory))
@@ -187,6 +204,8 @@ class Publication(Validation):
                 github = (assets / publish.asset(name, arch)).read_bytes()
                 self.assertEqual(github, uploaded[arch + '/' + name])
                 self.assertEqual(github, uploaded['builds/' + LOCK['build_id'] + '/' + arch + '/' + name])
+            self.assertEqual(b'# notes\n', uploaded['builds/' + LOCK['build_id'] + '/NOTES.md'])
+            self.assertEqual(b'# notes\n', uploaded['NOTES.md'])
 
     def test_a_release_whose_apks_differ_or_are_extra_fails(self):
         for change, error in [('differ', 'lacks'), ('extra', 'no build made')]:
@@ -220,11 +239,23 @@ class Release(unittest.TestCase):
                  ({'draft': True, 'assets': [{'name': 'release.json'}]}, 'publish'),
                  ({'draft': False, 'assets': [{'name': 'release.json'}]}, 'complete')]
         for current, state in cases:
-            with self.subTest(state=state), patch.object(publish, 'release', return_value=current):
-                self.assertEqual(state, publish.status('build-x'))
+            with self.subTest(state=state), patch.object(publish, 'release', return_value=current), \
+                    patch.object(publish, 'published', return_value=set()):
+                self.assertEqual(state, publish.status('build-x', LOCK))
         public_without_manifest = {'draft': False, 'assets': []}
         with patch.object(publish, 'release', return_value=public_without_manifest), self.assertRaises(ValueError):
-            publish.status('build-x')
+            publish.status('build-x', LOCK)
+
+    def test_a_published_version_is_never_rebuilt_nor_walked_back(self):
+        for kernels, error in [({((7, 2, 10), 1)}, None), ({((7, 2, 11), 1)}, 'increment policy.json revision'),
+                               ({((7, 2, 12), 1)}, 'refusing to go back'), ({((7, 2, 11), 2)}, 'refusing to go back')]:
+            with self.subTest(kernels=kernels), patch.object(publish, 'release', return_value=None), \
+                    patch.object(publish, 'published', return_value=kernels):
+                if error:
+                    with self.assertRaisesRegex(ValueError, error):
+                        publish.status('build-x', LOCK)
+                else:
+                    self.assertEqual('build', publish.status('build-x', LOCK))
 
     def test_archives_do_not_depend_on_extraction_times(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -249,7 +280,9 @@ class Release(unittest.TestCase):
                 nonlocal current
                 calls.append(args)
                 if args[:3] == ('gh', 'api', '--method'):
-                    self.assertTrue(json.loads(Path(args[-1]).read_text())['draft'])
+                    request = json.loads(Path(args[-1]).read_text())
+                    self.assertTrue(request['draft'])
+                    self.assertEqual('# notes\n', request['body'])
                     current = {'draft': True, 'assets': []}
                     return json.dumps(current)
                 if args[:3] == ('gh', 'release', 'upload'):
@@ -261,10 +294,11 @@ class Release(unittest.TestCase):
                     current['assets'].append({'name': path.name})
                 elif args[:3] == ('gh', 'release', 'download'):
                     name = args[args.index('--pattern') + 1]
-                    (Path(args[-1]) / name).write_bytes(uploaded[name])
+                    (Path(args[args.index('--dir') + 1]) / name).write_bytes(uploaded[name])
                 return ''
             environment = {'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': '1' * 40, 'GITHUB_RUN_NUMBER': '7'}
             with patch.dict(os.environ, environment), patch.object(publish, 'validate'), \
+                    patch.object(publish.notes, 'write', lambda path, *args: path.write_text('# notes\n')), \
                     patch.object(publish, 'release', side_effect=lambda tag: current), \
                     patch.object(publish, 'run', side_effect=run):
                 with self.assertRaisesRegex(RuntimeError, 'transient'):

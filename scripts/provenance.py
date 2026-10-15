@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 from inputs import ROOT, INPUTS, LOCK, sha256, verify
 
@@ -21,6 +22,12 @@ def main():
                  'config/' + args.arch + '.config']:
         shutil.copyfile(ROOT / name, packages / os.path.basename(name))
     shutil.copyfile(ROOT / 'build/keys/werewolf-packages.rsa.pub', packages / 'werewolf-packages.rsa.pub')
+    # The probe's verdicts, from the build's log (CI tees it there), for the release notes.
+    log = ROOT / 'build/build.log'
+    probe = [m[0] for m in map(re.compile(r'probe: (ok|FAIL|PASS) .+').search, log.read_text().splitlines()) if m]
+    if not probe or not probe[-1].startswith('probe: PASS '):
+        raise SystemExit('provenance: ' + str(log) + ' has no passing probe')
+    (packages / 'probe.log').write_text('\n'.join(probe) + '\n')
     record = {'build_id': lock['build_id'], 'arch': args.arch,
               'version': lock['version'] + '-r' + str(lock['revision']),
               'source_sha': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'],

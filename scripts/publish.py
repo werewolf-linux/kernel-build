@@ -5,7 +5,8 @@ status:  build, publish or complete, for the captured inputs' release tag
 stage:   validate both artifacts and stage them, and each APK, in a draft GitHub release
 publish: validate the draft again, sign the stable index, upload, and make the release public
 
-GitHub and R2 carry the same APK bytes; publish refuses a draft whose copies differ.
+GitHub and R2 carry the same APK bytes; publish refuses a draft whose copies differ. Both
+carry NOTES.md (scripts/notes.py), the GitHub release's body.
 """
 import argparse
 import gzip
@@ -19,15 +20,21 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 import zlib
 from build import recipe
 from inputs import ROOT, ARCHES, sha256, verify
+import notes
+from refresh import version
 
 ENDPOINT = 'https://c860af766754fb92eec27bc723e6db5d.r2.cloudflarestorage.com'
 BUCKET = 'werewolf'
 PREFIX = 'apk/kernel/'
 PUBLIC = 'https://dist.werewolf-linux.org/' + PREFIX
 PACKAGES = {'linux-werewolf', 'linux-werewolf-probe'}
+# GitHub refuses a release body over 125,000 characters.
+BODY = 120_000
 KEYNAME = '.SIGN.RSA256.werewolf-packages.rsa.pub'
 TRUST = ROOT / 'release/packages.pub'
 
@@ -128,6 +135,10 @@ def validate(directory, arch, lock, source_sha):
     tools = json.loads((ROOT / 'tools.lock.json').read_text())['toolchain']
     if (directory / 'linux.yaml').read_text() != recipe(lock, tools, arch):
         raise ValueError('publish: ' + directory.name + ' was built from another recipe')
+    kernel = lock['version'] + ('.0' if lock['version'].count('.') == 1 else '') + '-werewolf'
+    probe = (directory / 'probe.log').read_text().splitlines()
+    if not probe or probe[-1] != 'probe: PASS ' + kernel or any(line.startswith('probe: FAIL') for line in probe):
+        raise ValueError('publish: ' + directory.name + ' has no passing probe of ' + kernel)
     expected = {name + '-' + version + '.apk' for name in PACKAGES}
     if set(stanzas(authenticated(directory / arch / 'APKINDEX.tar.gz', TRUST))) != expected or \
             {p.name for p in (directory / arch).glob('*.apk')} != expected:
@@ -146,13 +157,40 @@ def validate(directory, arch, lock, source_sha):
     return record
 
 
-def status(tag):
+def published():
+    """The kernels in the stable repository machines follow, as (version, revision)."""
+    try:
+        with urllib.request.urlopen(PUBLIC + ARCHES[0] + '/APKINDEX.tar.gz', timeout=60) as response:
+            data = response.read()
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return set()
+        raise
+    with tempfile.TemporaryDirectory() as directory:
+        index = Path(directory) / 'APKINDEX.tar.gz'
+        index.write_bytes(data)
+        names = stanzas(authenticated(index, TRUST))
+    return {(version(m[1]), int(m[2])) for m in map(re.compile(r'linux-werewolf-([0-9.]+)-r([0-9]+)\.apk').fullmatch,
+                                                    names) if m}
+
+
+def status(tag, lock):
     current = release(tag)
-    if current is None or 'release.json' not in {a['name'] for a in current['assets']}:
-        if current is not None and not current['draft']:
-            raise ValueError('publish: public release ' + tag + ' has no completion manifest')
-        return 'build'
-    return 'publish' if current['draft'] else 'complete'
+    if current is not None and 'release.json' in {a['name'] for a in current['assets']}:
+        return 'publish' if current['draft'] else 'complete'
+    if current is not None and not current['draft']:
+        raise ValueError('publish: public release ' + tag + ' has no completion manifest')
+    # A new build of a published version would never reach a machine: the stable
+    # repository keeps a version's first build. Nor may kernel.org walk us back.
+    ours, full = (version(lock['version']), lock['revision']), lock['version'] + '-r' + str(lock['revision'])
+    for theirs in published():
+        if theirs == ours:
+            raise ValueError('publish: linux-werewolf ' + full + ' is already published, built from other inputs; '
+                             'increment policy.json revision to ship this build')
+        if theirs > ours:
+            raise ValueError('publish: linux-werewolf ' + full + ' is older than the published ' +
+                             '.'.join(map(str, theirs[0])) + '-r' + str(theirs[1]) + '; refusing to go back')
+    return 'build'
 
 
 def asset(apk, arch):
@@ -171,25 +209,35 @@ def stage(artifacts, assets, lock, tag):
         for apk in sorted((directory / arch).glob('*.apk')):
             names.append(asset(apk.name, arch))
             shutil.copyfile(apk, assets / names[-1])
+    current = release(tag)
+    if current is not None and not current['draft']:
+        raise ValueError('publish: refusing to change public release ' + tag)
+    # A resumed draft keeps the notes it was staged with, as what they draw on moves.
+    if current is not None and 'NOTES.md' in {a['name'] for a in current['assets']}:
+        run('gh', 'release', 'download', tag, '--pattern', 'NOTES.md', '--dir', str(assets), '--clobber')
+    else:
+        files = [(name, (assets / name).stat().st_size, sha256(assets / name)) for name in names]
+        notes.write(assets / 'NOTES.md', lock, artifacts, files, PUBLIC, os.environ['GITHUB_REPOSITORY'],
+                    os.environ['GITHUB_SHA'])
+    names.append('NOTES.md')
     manifest = {'build_id': lock['build_id'], 'version': lock['version'] + '-r' + str(lock['revision']),
                 'source_sha': os.environ['GITHUB_SHA'], 'run_number': int(os.environ['GITHUB_RUN_NUMBER']),
                 'repository': PUBLIC + 'builds/' + lock['build_id'],
+                'notes': PUBLIC + 'builds/' + lock['build_id'] + '/NOTES.md',
                 'sha256': {name: sha256(assets / name) for name in sorted(names)}}
     (assets / 'SHA256SUMS').write_text(''.join(f'{d}  {n}\n' for n, d in manifest['sha256'].items()))
     (assets / 'release.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    current = release(tag)
+    body = (assets / 'NOTES.md').read_text()
+    if len(body) > BODY:
+        body = body[:BODY] + '\n\n… the rest is in NOTES.md, among the files.\n'
     if current is None:
-        body = {'tag_name': tag, 'draft': True, 'make_latest': 'false', 'target_commitish': os.environ['GITHUB_SHA'],
-                'name': 'linux-werewolf ' + manifest['version'],
-                'body': 'Linux ' + lock['version'] + ' for werewolf, x86_64 and aarch64, both booted by the probe.\n'
-                        'Repository: ' + manifest['repository']}
+        request = {'tag_name': tag, 'draft': True, 'make_latest': 'false', 'target_commitish': os.environ['GITHUB_SHA'],
+                   'name': 'linux-werewolf ' + manifest['version'], 'body': body}
         with tempfile.TemporaryDirectory() as directory:
-            request = Path(directory) / 'release.json'
-            request.write_text(json.dumps(body))
+            path = Path(directory) / 'release.json'
+            path.write_text(json.dumps(request))
             current = json.loads(run('gh', 'api', '--method', 'POST',
-                                     'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases', '--input', str(request)))
-    if not current['draft']:
-        raise ValueError('publish: refusing to change public release ' + tag)
+                                     'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases', '--input', str(path)))
     existing = {a['name'] for a in current['assets']}
     # The manifest goes last: its presence marks a complete draft.
     for path in [assets / n for n in sorted(names)] + [assets / 'SHA256SUMS', assets / 'release.json']:
@@ -273,7 +321,9 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
     for name, digest in manifest['sha256'].items():
         if sha256(assets / name) != digest:
             raise ValueError('publish: ' + name + ' does not match the release manifest')
-    apks = set(manifest['sha256']) - set(names)
+    if 'NOTES.md' not in manifest['sha256']:
+        raise ValueError('publish: the release has no notes')
+    apks = set(manifest['sha256']) - set(names) - {'NOTES.md'}
     snapshot = 'builds/' + lock['build_id'] + '/'
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
@@ -306,6 +356,7 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
                 upload(apk, snapshot + arch + '/' + apk.name)
             upload(root / arch / 'APKINDEX.tar.gz', snapshot + arch + '/APKINDEX.tar.gz')
             upload(assets / ('linux-werewolf-' + arch + '.tar.gz'), snapshot + 'linux-werewolf-' + arch + '.tar.gz')
+        upload(assets / 'NOTES.md', snapshot + 'NOTES.md')
         upload(assets / 'SHA256SUMS', snapshot + 'SHA256SUMS')
         upload(assets / 'release.json', snapshot + 'release.json')
         # The stable repository machines follow keeps every published APK; only its index is replaced.
@@ -315,12 +366,14 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
             upload(index, arch + '/APKINDEX.tar.gz', immutable=False)
     with tempfile.TemporaryDirectory() as directory:
         current = Path(directory) / 'current'
-        # A run that finished late never moves the pointer back.
-        if not fetch('current.json', current) or \
-                json.loads(current.read_text())['run_number'] <= manifest['run_number']:
+        # A run that finished late never moves the pointer back, nor becomes GitHub's latest.
+        newest = not fetch('current.json', current) or \
+            json.loads(current.read_text())['run_number'] <= manifest['run_number']
+        if newest:
+            upload(assets / 'NOTES.md', 'NOTES.md', immutable=False)
             upload(assets / 'release.json', 'current.json', immutable=False)
     # The public release marks completion, after both repositories exist.
-    run('gh', 'release', 'edit', tag, '--draft=false', '--latest=false')
+    run('gh', 'release', 'edit', tag, '--draft=false', '--latest=' + ('true' if newest else 'false'))
     print('publish:', manifest['repository'])
 
 
@@ -333,7 +386,7 @@ def main():
     lock = verify()
     tag = 'build-' + lock['build_id']
     if args.command == 'status':
-        state = status(tag)
+        state = status(tag, lock)
         if os.environ.get('GITHUB_OUTPUT'):
             with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
                 output.write('state=' + state + '\n')

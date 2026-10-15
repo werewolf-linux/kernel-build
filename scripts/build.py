@@ -13,7 +13,8 @@ import subprocess
 import threading
 from inputs import ROOT, sha256, verify
 
-CONTEXT = ['config', 'boot', 'scripts', 'release/ipe.crt']
+# All the recipe reads of ours; each is in inputs.POLICY_INPUTS.
+CONTEXT = ['config', 'boot', 'scripts/config.py', 'release/ipe.crt']
 
 
 def recipe(lock, tools, arch):

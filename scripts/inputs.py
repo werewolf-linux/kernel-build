@@ -7,8 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 INPUTS = ROOT / 'build/inputs'
 LOCK = 'kernel.lock.json'
 ARCHES = ('x86_64', 'aarch64')
-POLICY_INPUTS = ['Makefile', 'linux.yaml', 'tools.lock.json', 'policy.json',
-                 'scripts', 'tests', 'config', 'boot', 'release', '.github/workflows']
+# What reaches the packages' bytes: the recipe and what it reads (build.py's CONTEXT),
+# the toolchain pins and the keys. Tests, workflows and the publisher do not, so editing
+# them builds nothing; a change here builds a new kernel, which needs a new revision.
+POLICY_INPUTS = ['linux.yaml', 'tools.lock.json', 'policy.json', 'config', 'boot', 'release/ipe.crt',
+                 'release/packages.pub', 'scripts/build.py', 'scripts/config.py']
 
 
 def sha256(path):

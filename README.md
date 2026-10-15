@@ -36,11 +36,15 @@ and IPE from the first instruction; throughput tuned with PostgreSQL as the yard
 | `boot/probe.c` | the boot test: the only process of a QEMU boot |
 | `release/` | kernel.org's signing keys, werewolf's APK and IPE certificates |
 
-`make refresh` reads kernel.org's `releases.json`, takes the newest `stable` release,
-verifies its signature against the committed keys of Greg Kroah-Hartman and Linus
-Torvalds, and locks its SHA-256 with hashes of this tree's files in
-`build/inputs/kernel.lock.json`. `policy.json` names the series (`stable` or
-`longterm`) and a revision, the package's `-rN`.
+`make refresh` reads kernel.org's `releases.json`, takes the newest `stable` release of
+the series `config/ARCH.config` was made from, verifies its signature against the
+committed keys of Greg Kroah-Hartman and Linus Torvalds, and locks its SHA-256 with
+hashes of the files that reach the packages in `build/inputs/kernel.lock.json`.
+`policy.json` names the moniker (`stable` or `longterm`) and a revision, the package's
+`-rN`. A new series waits for `refresh.py --series X.Y && make config` and a review,
+while ours keeps getting point releases; CI opens an issue when one appears. A change
+to those files builds a new kernel of the same version, which needs a new revision: the
+stable repository keeps each version's first build, so CI refuses to build it again.
 
 `make config` runs `allnoconfig` with the lists forced on, so nothing unnamed is on,
 then fails unless every list line and `deny.cfg` hold. A line that does not hold names
@@ -76,7 +80,11 @@ natively on x86_64 and aarch64; both must boot the probe before
 `https://dist.werewolf-linux.org/apk/kernel` machines follow. The GitHub release carries
 each APK too, as `NAME-VERSION.ARCH.apk`, the same bytes R2 serves. Every published APK
 is kept; only the index is re-signed, after the previous one verifies. The release key
-is werewolf's `WEREWOLF_PACKAGES_KEY`; `release/packages.pub` must match it.
+is werewolf's `WEREWOLF_PACKAGES_KEY`; `release/packages.pub` must match it. Each
+release's notes, the GitHub release's body and `NOTES.md` in its snapshot, list the
+upstream ChangeLogs, the CVEs the kernel CNA says it fixes, our commits and config
+changes since the last release, and both probe transcripts
+([scripts/notes.py](scripts/notes.py)).
 
 ## Drawbacks
 

@@ -11,9 +11,26 @@
 
 static int failed;
 
+/*
+ * say prints "probe: verdict what" in one write: printf writes in pieces, and
+ * the kernel's console messages (IPE's audit of a refused policy, for one)
+ * would land between them and break the line the build reads.
+ */
+static void say(const char *verdict, const char *what)
+{
+	const char *parts[] = { "probe: ", verdict, " ", what, "\n" };
+	char line[256];
+	size_t n = 0;
+
+	for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
+		for (const char *c = parts[i]; *c && n < sizeof(line) - 1; c++)
+			line[n++] = *c;
+	write(1, line, n);
+}
+
 static void check(const char *what, int ok)
 {
-	printf("probe: %s %s\n", ok ? "ok" : "FAIL", what);
+	say(ok ? "ok" : "FAIL", what);
 	failed |= !ok;
 }
 
@@ -102,7 +119,7 @@ int main(void)
 	check("IPE refuses a policy signed by any other key", untrusted_policy_refused());
 	check("running config is readable", open("/proc/config.gz", O_RDONLY) >= 0);
 
-	printf("probe: %s %s\n", failed ? "FAIL" : "PASS", u.release);
+	say(failed ? "FAIL" : "PASS", u.release);
 	reboot(LINUX_REBOOT_CMD_POWER_OFF);
 	printf("probe: power off failed: errno %d\n", errno);
 	return 1;

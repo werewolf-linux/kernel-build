@@ -8,10 +8,12 @@ INPUTS = ROOT / 'build/inputs'
 LOCK = 'kernel.lock.json'
 ARCHES = ('x86_64', 'aarch64')
 # What reaches the packages' bytes: the recipe and what it reads (build.py's CONTEXT),
-# the toolchain pins and the keys. Tests, workflows and the publisher do not, so editing
-# them builds nothing; a change here builds a new kernel, which needs a new revision.
-POLICY_INPUTS = ['linux.yaml', 'tools.lock.json', 'policy.json', 'config', 'boot', 'release/ipe.crt',
-                 'release/packages.pub', 'scripts/build.py', 'scripts/config.py']
+# the toolchain pins and the keys. Tests, workflows, the publisher and config/ARCH.config,
+# make config's copy for review, do not, so editing them builds nothing; a change here
+# builds a new kernel, which needs a new revision.
+POLICY_INPUTS = ['linux.yaml', 'tools.lock.json', 'policy.json', 'config/common.cfg', 'config/x86_64.cfg',
+                 'config/aarch64.cfg', 'config/deny.cfg', 'boot', 'release/ipe.crt', 'release/packages.pub',
+                 'scripts/build.py', 'scripts/config.py']
 
 
 def sha256(path):

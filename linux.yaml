@@ -66,10 +66,11 @@ pipeline:
       # Out of tree: the workspace is also $HOME, where ~/.config may exist.
       mkdir out
       cp werewolf/release/ipe.crt out/ipe.crt
-      # allnoconfig again, not olddefconfig: an option the committed config does
-      # not name stays off here too, whatever this toolchain makes visible.
-      make O=out ARCH=$karch LLVM=1 KCONFIG_ALLCONFIG=$PWD/werewolf/config/${{build.arch}}.config allnoconfig
-      python3 werewolf/scripts/config.py same --arch ${{build.arch}} out/.config
+      # The lists over allnoconfig, as make config does, for whatever release this
+      # is: an option they do not name is off, a new series' own included. A line
+      # the source no longer honours (renamed, removed, a dependency unmet) stops here.
+      cat werewolf/config/common.cfg werewolf/config/${{build.arch}}.cfg > out/lists.cfg
+      make O=out ARCH=$karch LLVM=1 KCONFIG_ALLCONFIG=$PWD/out/lists.cfg allnoconfig
       python3 werewolf/scripts/config.py check --arch ${{build.arch}} out/.config
 
   - name: Build and install the kernel

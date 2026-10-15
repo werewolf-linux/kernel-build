@@ -83,7 +83,7 @@ class Authentication(Keys):
 
 
 class Validation(Keys):
-    def build(self, root, arch='x86_64', names=publish.PACKAGES, ipe_crt=None, verdict='PASS'):
+    def build(self, root, arch='x86_64', names=publish.PACKAGES, ipe_crt=None, verdict='PASS', config=None):
         """A signed native build as provenance.py lays it out."""
         version = LOCK['version'] + '-r1'
         directory = root / ('linux-werewolf-' + arch)
@@ -93,6 +93,7 @@ class Validation(Keys):
             files = {'boot/file': name.encode()}
             if name == 'linux-werewolf':
                 files['boot/ipe.crt'] = (ROOT / 'release/ipe.crt').read_bytes() if ipe_crt is None else ipe_crt
+                files['boot/config-7.2.11-werewolf'] = b'CONFIG_MODULES is not set\n'
             payload = member(files)
             info = f'pkgname = {name}\npkgver = {version}\narch = {arch}\ndatahash = '
             info += __import__('hashlib').sha256(payload).hexdigest() + '\n'
@@ -103,6 +104,7 @@ class Validation(Keys):
             self.signed(member({'APKINDEX': ('\n\n'.join(stanzas) + '\n').encode()})))
         (directory / 'werewolf-packages.rsa.pub').write_bytes(self.public.read_bytes())
         (directory / 'linux.yaml').write_text('recipe')
+        (directory / (arch + '.config')).write_bytes(config if config is not None else b'CONFIG_MODULES is not set\n')
         (directory / 'probe.log').write_text(f'probe: ok no module loader\nprobe: {verdict} 7.2.11-werewolf\n')
         record = {'build_id': LOCK['build_id'], 'arch': arch, 'version': version, 'source_sha': '1' * 40,
                   'sha256': {str(p.relative_to(directory)): publish.sha256(p)
@@ -132,6 +134,11 @@ class Validation(Keys):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, 'exactly'):
                 self.validate(self.build(Path(directory), names={'linux-werewolf'}))
+
+    def test_a_recorded_config_must_be_the_one_shipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'another config'):
+                self.validate(self.build(Path(directory), config=b'CONFIG_MODULES=y\n'))
 
     def test_a_build_without_a_passing_probe_fails(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -2,9 +2,9 @@
 """Make each full kernel config from our explicit option list, and prove it holds.
 
 generate: allnoconfig with config/common.cfg and config/ARCH.cfg forced on, so an
-          option nobody named is off; writes config/ARCH.config.
+          option nobody named is off; writes config/ARCH.config, for review. The build
+          derives its own the same way, for the release it builds (linux.yaml).
 check:    a config holds every listed option and nothing in config/deny.cfg.
-same:     a configured tree matches config/ARCH.config but for toolchain probes.
 """
 import argparse
 from pathlib import Path
@@ -58,14 +58,6 @@ def misses(arch, text):
             for symbol, value in sorted(wanted.items()) if actual.get(symbol) != value]
 
 
-def differences(committed, configured):
-    """Options set differently in two configs, ignoring toolchain probes."""
-    a, b = values(committed), values(configured)
-    return [f'{symbol}: committed {a.get(symbol, "n")}, configured {b.get(symbol, "n")}'
-            for symbol in sorted(a.keys() | b.keys())
-            if a.get(symbol) != b.get(symbol) and not PROBE.fullmatch(symbol)]
-
-
 def generate(arch, source, make):
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
@@ -87,11 +79,11 @@ def generate(arch, source, make):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['generate', 'check', 'same'])
+    parser.add_argument('command', choices=['generate', 'check'])
     parser.add_argument('--arch', choices=KERNEL_ARCH, required=True)
     parser.add_argument('--source', type=Path, help='kernel source tree, for generate')
     parser.add_argument('--make', default='make', help='GNU make 4 or later')
-    parser.add_argument('config', type=Path, nargs='?', help='config to check or compare')
+    parser.add_argument('config', type=Path, nargs='?', help='config to check')
     args = parser.parse_args()
     committed = ROOT / 'config' / (args.arch + '.config')
     if args.command == 'generate':
@@ -100,17 +92,10 @@ def main():
         generate(args.arch, args.source, args.make)
         return
     config = args.config or committed
-    if args.command == 'check':
-        failed = misses(args.arch, config.read_text())
-        if failed:
-            raise SystemExit(f'config: {config}: {len(failed)} lines do not hold:\n  ' + '\n  '.join(failed))
-        print(f'config: {config} holds all {len(policy(args.arch))} listed options and config/deny.cfg')
-        return
-    changed = differences(committed.read_text(), config.read_text())
-    if changed:
-        raise SystemExit(f'config: {config} differs from {committed.name}; run make config:\n  ' +
-                         '\n  '.join(changed))
-    print(f'config: {config} matches {committed.name}')
+    failed = misses(args.arch, config.read_text())
+    if failed:
+        raise SystemExit(f'config: {config}: {len(failed)} lines do not hold:\n  ' + '\n  '.join(failed))
+    print(f'config: {config} holds all {len(policy(args.arch))} listed options and config/deny.cfg')
 
 
 if __name__ == '__main__':

@@ -17,8 +17,6 @@ jobs:
     permissions:
       # Finding a resumable draft release needs push access.
       contents: write
-      # Asking, once, for the move to a new series.
-      issues: write
       # GitHub stops a public repository's schedule after 60 days without commits.
       actions: write
     outputs:
@@ -32,23 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - id: refresh
-        run: python3 scripts/refresh.py
-      # Our series keeps its point releases meanwhile; the issue stays open until closed.
-      - name: Ask for the move to a new series
-        if: steps.refresh.outputs.newer != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NEWER: ${{ steps.refresh.outputs.newer }}
-        run: |
-          title="Move the lists to Linux $NEWER"
-          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
-            --json title --jq "[.[] | select(.title == \"$title\")] | length")
-          [ "$open" != 0 ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "\
-          kernel.org's newest stable series is Linux $NEWER. kernel-build stays on the series its
-          configs were made from, which keeps getting point releases until kernel.org ends it.
-          To move: \`python3 scripts/refresh.py --series $NEWER && make config\`, review each
-          option the new series adds or drops, and commit config/. The next build follows it."
+      - run: python3 scripts/refresh.py
       - run: make check verify
       - id: check
         env:

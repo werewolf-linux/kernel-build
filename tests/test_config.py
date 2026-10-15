@@ -64,21 +64,6 @@ class Holding(unittest.TestCase):
         self.assertTrue(config.misses('x86_64', 'CONFIG_ON=m\nCONFIG_S="-werewolf"\nCONFIG_X86=y\n'))
 
 
-class Comparison(unittest.TestCase):
-    def test_compiler_probes_are_not_choices(self):
-        committed = 'CONFIG_CC_VERSION_TEXT="clang 23"\nCONFIG_CLANG_VERSION=230103\nCONFIG_CC_HAS_NEW=y\nCONFIG_A=y\n'
-        configured = 'CONFIG_CC_VERSION_TEXT="clang 22"\nCONFIG_CLANG_VERSION=220108\nCONFIG_A=y\n'
-        self.assertEqual([], config.differences(committed, configured))
-
-    def test_host_tool_probes_are_not_choices(self):
-        committed = 'CONFIG_RUSTC_LLVM_MAJOR_VERSION=23\nCONFIG_OPENSSL_SUPPORTS_ML_DSA=y\nCONFIG_CC_MS_EXTENSIONS="-x"\n'
-        self.assertEqual([], config.differences(committed, 'CONFIG_CC_MS_EXTENSIONS="-y"\n'))
-
-    def test_a_real_option_differing_is_reported(self):
-        self.assertEqual(['CONFIG_KMALLOC_PARTITION_TYPED: committed y, configured n'],
-                         config.differences('CONFIG_KMALLOC_PARTITION_TYPED=y\n', ''))
-
-
 class Committed(unittest.TestCase):
     def test_both_committed_configs_hold_the_lists_and_the_deny_list(self):
         for arch in config.KERNEL_ARCH:

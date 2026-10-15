@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """Capture kernel.org's newest release of the policy's moniker without maintaining a version.
 
-It stays on the series the committed configs were made from: a new series adds options
-nobody has reviewed, and its first build waits for make config. Until then, the series
-we have keeps getting its point releases, and GITHUB_OUTPUT's `newer` names the new one.
-`--series 7.3` captures the new one for `make config`.
+A new series is followed like a point release: the build derives its config from the
+lists, where each option the series adds starts off (linux.yaml).
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import urllib.request
-from inputs import ROOT, INPUTS, LOCK, ARCHES, identity, policy_hashes, sha256
+from inputs import ROOT, INPUTS, LOCK, identity, policy_hashes, sha256
 
 RELEASES = 'https://www.kernel.org/releases.json'
 KEYS = ROOT / 'release/kernel.org'
@@ -29,32 +26,11 @@ def version(text):
     return tuple(int(part) for part in text.split('.'))
 
 
-def series(text):
-    return '.'.join(text.split('.')[:2])
-
-
-def configured_series(root=ROOT):
-    """The series both committed configs were made from, as kconfig recorded it."""
-    found = set()
-    for arch in ARCHES:
-        header = re.search(r'^# Linux/\S+ ([0-9]+\.[0-9]+)[0-9.]* Kernel Configuration$',
-                           (root / 'config' / (arch + '.config')).read_text(), re.M)
-        if not header:
-            raise ValueError('config/' + arch + '.config names no kernel version')
-        found.add(header[1])
-    if len(found) != 1:
-        raise ValueError('the configs come from different series: ' + ', '.join(sorted(found)))
-    return found.pop()
-
-
-def latest(releases, moniker, within=None):
-    """The newest supported release of moniker, in series within if named."""
+def latest(releases, moniker):
     candidates = [r for r in releases['releases']
-                  if r['moniker'] == moniker and not r['iseol'] and VERSION.fullmatch(r['version']) and
-                  (within is None or series(r['version']) == within)]
+                  if r['moniker'] == moniker and not r['iseol'] and VERSION.fullmatch(r['version'])]
     if not candidates:
-        raise ValueError('No supported ' + moniker + ' release' + (' in the ' + within + ' series' if within else '') +
-                         ' on kernel.org' + ('; it has ended: run make config on the next' if within else ''))
+        raise ValueError('No supported ' + moniker + ' release on kernel.org')
     release = max(candidates, key=lambda r: version(r['version']))
     major = release['version'].split('.')[0]
     source = 'https://cdn.kernel.org/pub/linux/kernel/v' + major + '.x/linux-' + release['version'] + '.tar.xz'
@@ -127,7 +103,6 @@ def main():
     parser.add_argument('--releases', type=Path, help='saved releases.json, for offline use')
     parser.add_argument('--cache', type=Path, default=ROOT / 'build/source', help='where tarballs are kept')
     parser.add_argument('--unpack', action='store_true', help='only extract the captured release')
-    parser.add_argument('--series', help='capture this series, not the configs\' own: the move to a new one')
     args = parser.parse_args()
     if args.unpack:
         # Editing the lists changes the policy hashes; the source needs only its own.
@@ -139,15 +114,7 @@ def main():
         with urllib.request.urlopen(RELEASES, timeout=60) as response:
             releases = json.load(response)
     moniker = json.loads((ROOT / 'policy.json').read_text())['moniker']
-    current = args.series or configured_series()
-    release = latest(releases, moniker, current)
-    newest = latest(releases, moniker)
-    if version(series(newest['version'])) > version(current):
-        print('refresh: kernel.org\'s newest', moniker, 'series is', series(newest['version']) + '; staying on',
-              current, 'until make config moves the lists to it', flush=True)
-        if os.environ.get('GITHUB_OUTPUT'):
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-                output.write('newer=' + series(newest['version']) + '\n')
+    release = latest(releases, moniker)
     args.cache.mkdir(parents=True, exist_ok=True)
     tarball = args.cache / release['source'].rsplit('/', 1)[1]
     signature = args.cache / release['pgp'].rsplit('/', 1)[1]

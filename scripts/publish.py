@@ -133,9 +133,9 @@ def validate(directory, arch, lock, source_sha):
     if (directory / 'werewolf-packages.rsa.pub').read_bytes() != TRUST.read_bytes():
         raise ValueError('publish: an ephemeral key signed ' + directory.name)
     tools = json.loads((ROOT / 'tools.lock.json').read_text())['toolchain']
+    kernel = lock['version'] + ('.0' if lock['version'].count('.') == 1 else '') + '-werewolf'
     if (directory / 'linux.yaml').read_text() != recipe(lock, tools, arch):
         raise ValueError('publish: ' + directory.name + ' was built from another recipe')
-    kernel = lock['version'] + ('.0' if lock['version'].count('.') == 1 else '') + '-werewolf'
     probe = (directory / 'probe.log').read_text().splitlines()
     if not probe or probe[-1] != 'probe: PASS ' + kernel or any(line.startswith('probe: FAIL') for line in probe):
         raise ValueError('publish: ' + directory.name + ' has no passing probe of ' + kernel)
@@ -151,9 +151,13 @@ def validate(directory, arch, lock, source_sha):
             raise ValueError('publish: ' + apk.name + ' says it is something else')
         if len(parts) != 3 or fields['datahash'] != hashlib.sha256(parts[2][0]).hexdigest():
             raise ValueError('publish: ' + apk.name + ' payload does not match its signed hash')
-        if fields['pkgname'] == 'linux-werewolf' and \
-                contents(parts[2][1]).get('boot/ipe.crt') != (ROOT / 'release/ipe.crt').read_bytes():
-            raise ValueError('publish: ' + apk.name + ' is a test kernel: IPE trusts another certificate')
+        if fields['pkgname'] == 'linux-werewolf':
+            files = contents(parts[2][1])
+            if files.get('boot/ipe.crt') != (ROOT / 'release/ipe.crt').read_bytes():
+                raise ValueError('publish: ' + apk.name + ' is a test kernel: IPE trusts another certificate')
+            # The notes' config is the one the kernel ships.
+            if files.get('boot/config-' + kernel) != (directory / (arch + '.config')).read_bytes():
+                raise ValueError('publish: ' + directory.name + ' records another config than ' + apk.name + ' ships')
     return record
 
 

@@ -34,13 +34,15 @@ class Recipe(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'refusing'):
                 build.recipe(dict(LOCK, **change), TOOLS, 'x86_64')
 
-    def test_the_build_checks_the_config_before_compiling(self):
+    def test_the_build_derives_and_checks_the_config_before_compiling(self):
         text = (ROOT / 'linux.yaml').read_text()
-        self.assertLess(text.index('config.py same'), text.index('LLVM=1 -j$(nproc)'))
         self.assertLess(text.index('config.py check'), text.index('LLVM=1 -j$(nproc)'))
-        # The committed config is re-applied with allnoconfig: no defaults fill gaps.
-        self.assertIn('allnoconfig', text)
-        self.assertNotIn('LLVM=1 olddefconfig', text)
+        # The lists over allnoconfig, for whatever release: no defaults fill gaps,
+        # and make config's committed copy is not an input.
+        self.assertIn('werewolf/config/common.cfg werewolf/config/${{build.arch}}.cfg', text)
+        self.assertIn('KCONFIG_ALLCONFIG=$PWD/out/lists.cfg allnoconfig', text)
+        self.assertNotIn('.config allnoconfig', text)
+        self.assertNotIn('olddefconfig', text)
 
     def test_the_test_boots_the_kernel_and_requires_a_pass(self):
         text = (ROOT / 'linux.yaml').read_text()

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 from inputs import ROOT, INPUTS, LOCK, sha256, verify
+from publish import contents, members
 
 
 def main():
@@ -18,9 +19,15 @@ def main():
         raise SystemExit('provenance: no signed package index for ' + args.arch)
     shutil.copyfile(INPUTS / LOCK, packages / LOCK)
     for name in ['tools.lock.json', 'policy.json', 'release/packages.pub', 'build/linux.yaml',
-                 'config/common.cfg', 'config/deny.cfg', 'config/' + args.arch + '.cfg',
-                 'config/' + args.arch + '.config']:
+                 'config/common.cfg', 'config/deny.cfg', 'config/' + args.arch + '.cfg']:
         shutil.copyfile(ROOT / name, packages / os.path.basename(name))
+    # The config the kernel was built with, which the lists derived for this release.
+    apk = packages / args.arch / ('linux-werewolf-' + lock['version'] + '-r' + str(lock['revision']) + '.apk')
+    files = contents(members(apk.read_bytes())[2][1])
+    configs = [name for name in files if name.startswith('boot/config-')]
+    if len(configs) != 1:
+        raise SystemExit('provenance: ' + apk.name + ' holds no single boot/config-')
+    (packages / (args.arch + '.config')).write_bytes(files[configs[0]])
     shutil.copyfile(ROOT / 'build/keys/werewolf-packages.rsa.pub', packages / 'werewolf-packages.rsa.pub')
     # The probe's verdicts, from the build's log (CI tees it there), for the release notes.
     log = ROOT / 'build/build.log'

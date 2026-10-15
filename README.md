@@ -31,19 +31,17 @@ and IPE from the first instruction; throughput tuned with PostgreSQL as the yard
 | --- | --- |
 | `config/common.cfg`, `config/ARCH.cfg` | every option on, grouped by who needs it |
 | `config/deny.cfg` | options that must stay off whatever selects them |
-| `config/ARCH.config` | the full config `make config` derived; the build's input |
+| `config/ARCH.config` | the full config `make config` derives, for review; not an input |
 | `linux.yaml` | the Melange recipe; `scripts/build.py` fills its `@` fields |
 | `boot/probe.c` | the boot test: the only process of a QEMU boot |
 | `release/` | kernel.org's signing keys, werewolf's APK and IPE certificates |
 
-`make refresh` reads kernel.org's `releases.json`, takes the newest `stable` release of
-the series `config/ARCH.config` was made from, verifies its signature against the
-committed keys of Greg Kroah-Hartman and Linus Torvalds, and locks its SHA-256 with
-hashes of the files that reach the packages in `build/inputs/kernel.lock.json`.
-`policy.json` names the moniker (`stable` or `longterm`) and a revision, the package's
-`-rN`. A new series waits for `refresh.py --series X.Y && make config` and a review,
-while ours keeps getting point releases; CI opens an issue when one appears. A change
-to those files builds a new kernel of the same version, which needs a new revision: the
+`make refresh` reads kernel.org's `releases.json`, takes the newest `stable` release, a
+new series' as readily as a point release, verifies its signature against the committed
+keys of Greg Kroah-Hartman and Linus Torvalds, and locks its SHA-256 with hashes of the
+files that reach the packages in `build/inputs/kernel.lock.json`. `policy.json` names
+the moniker (`stable` or `longterm`) and a revision, the package's `-rN`. A change to
+those files builds a new kernel of the same version, which needs a new revision: the
 stable repository keeps each version's first build, so CI refuses to build it again.
 
 `make config` runs `allnoconfig` with the lists forced on, so nothing unnamed is on,
@@ -53,13 +51,14 @@ It needs clang 22 or later, `ld.lld` and GNU make 4 (`gmake` on macOS).
 `make check` proves both committed configs still hold the lists, and runs the tests.
 
 `make build` builds with the pinned Melange and Wolfi's pinned clang-22. The recipe
-re-applies the committed config with `allnoconfig` and stops if any option differs
-but the toolchain's own probes. It packages `linux-werewolf` (`boot/vmlinuz-werewolf`,
-the config, `kernel-package` and the IPE certificate) and `linux-werewolf-probe`, the
-probe as an initramfs. The package test boots the kernel with the probe as PID 1 and
-requires a `PASS` line: release `-werewolf`, no module loader, lockdown
-`confidentiality`, exactly the LSMs werewolf names, Landlock ABI 10, no io_uring,
-BPF, kexec or user namespaces, IPE enforcing and refusing any key but werewolf's.
+derives the config from the lists as `make config` does, for whatever release it builds,
+so each option a new series adds starts off, and stops if a list line or `deny.cfg` no
+longer holds. It packages `linux-werewolf` (`boot/vmlinuz-werewolf`, the config,
+`kernel-package` and the IPE certificate) and `linux-werewolf-probe`, the probe as an
+initramfs. The package test boots the kernel with the probe as PID 1 and requires a
+`PASS` line: release `-werewolf`, no module loader, lockdown `confidentiality`, exactly
+the LSMs werewolf names, Landlock ABI 10, no io_uring, BPF, kexec or user namespaces,
+IPE enforcing and refusing any key but werewolf's.
 
 On Linux with bubblewrap the build uses the runner werewolf CI uses. On macOS Melange
 boots a guest kernel with 9p and overlayfs, which ours lacks. Melange's
@@ -88,8 +87,10 @@ changes since the last release, and both probe transcripts
 
 ## Drawbacks
 
-A series every nine to ten weeks, each a review of what changed under the lists. A
-driver or protocol a form newly needs waits for a list line and a release.
+A new series, every nine to ten weeks, ships before anyone reviews it: only what the
+lists name is on, and its notes list every option that changed, but a series that
+renames an option we list stops releases until the list follows. A driver or protocol a
+form newly needs waits for a list line and a release.
 
 ## Alternatives Considered
 
@@ -108,8 +109,8 @@ Nothing published is replaced.
 
 ## Reliability Considerations
 
-Drift fails closed: a list line, the deny list, a re-applied config that differs, or
-the boot probe. A failed build leaves the previous release in place; a complete draft
+Drift fails closed: a list line a new release no longer honours, the deny list, or the
+boot probe. A failed build leaves the previous release in place; a complete draft
 lets publication resume without rebuilding. Machines keep the previous kernel.
 
 [design]: https://github.com/werewolf-linux/werewolf/blob/main/docs/design/custom-kernel.md

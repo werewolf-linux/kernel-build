@@ -14,7 +14,8 @@ import threading
 from inputs import ROOT, sha256, verify
 
 # All the recipe reads of ours; each is in inputs.POLICY_INPUTS.
-CONTEXT = ['config', 'boot', 'scripts/config.py', 'release/ipe.crt']
+CONTEXT = ['config/common.cfg', 'config/x86_64.cfg', 'config/aarch64.cfg', 'config/deny.cfg', 'boot',
+           'scripts/config.py', 'release/ipe.crt']
 
 
 def recipe(lock, tools, arch):

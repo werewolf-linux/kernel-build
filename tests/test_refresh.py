@@ -31,25 +31,9 @@ class Latest(unittest.TestCase):
         releases = {'releases': [entry('stable', '7.2.9'), entry('stable', '7.10.0')]}
         self.assertEqual('7.10.0', refresh.latest(releases, 'stable')['version'])
 
-    def test_a_new_series_waits_while_ours_is_supported(self):
-        releases = {'releases': [entry('stable', '7.2.12'), entry('stable', '7.3.1'), entry('stable', '7.3')]}
-        self.assertEqual('7.2.12', refresh.latest(releases, 'stable', '7.2')['version'])
+    def test_a_new_series_is_followed(self):
+        releases = {'releases': [entry('stable', '7.2.12'), entry('stable', '7.3.1'), entry('longterm', '6.18.60')]}
         self.assertEqual('7.3.1', refresh.latest(releases, 'stable')['version'])
-        ended = {'releases': [entry('stable', '7.2.20', eol=True), entry('stable', '7.3.4')]}
-        with self.assertRaisesRegex(ValueError, 'ended: run make config'):
-            refresh.latest(ended, 'stable', '7.2')
-
-    def test_the_series_is_the_one_the_configs_were_made_from(self):
-        self.assertRegex(refresh.configured_series(), r'^[0-9]+\.[0-9]+$')
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'config').mkdir()
-            (root / 'config/x86_64.config').write_text('#\n# Linux/x86 7.2.11 Kernel Configuration\n')
-            (root / 'config/aarch64.config').write_text('#\n# Linux/arm64 7.3.1 Kernel Configuration\n')
-            with self.assertRaisesRegex(ValueError, 'different series'):
-                refresh.configured_series(root)
-            (root / 'config/aarch64.config').write_text('#\n# Linux/arm64 7.2.11 Kernel Configuration\n')
-            self.assertEqual('7.2', refresh.configured_series(root))
 
     def test_an_unexpected_date_stops(self):
         odd = entry('stable', '7.2.11')
@@ -143,13 +127,14 @@ class Identity(unittest.TestCase):
     def test_everything_the_build_reads_is_an_input(self):
         hashed = inputs.policy_hashes()
         for name in ('linux.yaml', 'tools.lock.json', 'policy.json', 'config/common.cfg', 'config/deny.cfg',
-                     'config/x86_64.config', 'boot/probe.c', 'release/ipe.crt', 'scripts/build.py'):
+                     'config/x86_64.cfg', 'boot/probe.c', 'release/ipe.crt', 'scripts/build.py'):
             with self.subTest(name=name):
                 self.assertIn(name, hashed)
         for name in build.CONTEXT:
             with self.subTest(context=name):
                 self.assertTrue(any(path == name or path.startswith(name + '/') for path in hashed))
-        for name in ('tests/test_refresh.py', 'scripts/publish.py', '.github/workflows/refresh.yml', 'README.md'):
+        for name in ('tests/test_refresh.py', 'scripts/publish.py', '.github/workflows/refresh.yml', 'README.md',
+                     'config/x86_64.config'):
             with self.subTest(outside=name):
                 self.assertNotIn(name, hashed)
 

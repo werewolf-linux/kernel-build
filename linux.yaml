@@ -101,8 +101,9 @@ subpackages:
             aarch64) karch=arm64 ;;
           esac
           make O=out ARCH=$karch LLVM=1 headers
-          clang -Os -static -nostdlib -nostdinc -fno-asynchronous-unwind-tables -Wall -Wextra -Werror \
-            -I tools/include/nolibc -I out/usr/include -fuse-ld=lld -o probe werewolf/boot/probe.c
+          # nolibc sets up no TLS, where x86's stack protector reads its canary (%fs:0x28).
+          clang -Os -static -nostdlib -nostdinc -fno-asynchronous-unwind-tables -fno-stack-protector \
+            -Wall -Wextra -Werror -I tools/include/nolibc -I out/usr/include -fuse-ld=lld -o probe werewolf/boot/probe.c
           clang -O2 -o gen_init_cpio usr/gen_init_cpio.c
           # A well-formed policy signed by a key the kernel does not trust: IPE must refuse it.
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=untrusted -keyout untrusted.key \

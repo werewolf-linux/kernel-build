@@ -146,6 +146,63 @@ class Validation(Keys):
                 publish.validate(built, 'x86_64', LOCK, '1' * 40)
 
 
+class Publication(Validation):
+    def draft(self, root):
+        """A staged draft's assets: each arch's archive and APKs, SHA256SUMS and release.json."""
+        assets = root / 'assets'
+        assets.mkdir()
+        names = []
+        for arch in publish.ARCHES:
+            built = self.build(root / 'artifacts', arch)
+            names.append('linux-werewolf-' + arch + '.tar.gz')
+            publish.archive(built, assets / names[-1])
+            for apk in (built / arch).glob('*.apk'):
+                names.append(publish.asset(apk.name, arch))
+                (assets / names[-1]).write_bytes(apk.read_bytes())
+        self.manifest(assets, names)
+        return assets
+
+    def manifest(self, assets, names):
+        digests = {name: publish.sha256(assets / name) for name in sorted(names)}
+        (assets / 'SHA256SUMS').write_text(''.join(f'{d}  {n}\n' for n, d in digests.items()))
+        (assets / 'release.json').write_text(json.dumps({
+            'build_id': LOCK['build_id'], 'source_sha': '1' * 40, 'run_number': 7,
+            'repository': 'r', 'sha256': digests}))
+
+    def publish(self, assets):
+        uploaded = {}
+        with patch.object(publish, 'TRUST', self.public), patch.object(publish, 'recipe', return_value='recipe'), \
+                patch.object(publish, 'run', return_value=''), patch.object(publish, 'fetch', return_value=False), \
+                patch.object(publish, 'upload', side_effect=lambda path, key, immutable=True:
+                             uploaded.setdefault(key, Path(path).read_bytes())):
+            publish.publish(assets, LOCK, 'build-x', key=self.private)
+        return uploaded
+
+    def test_github_and_r2_carry_the_same_apks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            assets = self.draft(Path(directory))
+            uploaded = self.publish(assets)
+            name = 'linux-werewolf-' + LOCK['version'] + '-r1.apk'
+            for arch in publish.ARCHES:
+                github = (assets / publish.asset(name, arch)).read_bytes()
+                self.assertEqual(github, uploaded[arch + '/' + name])
+                self.assertEqual(github, uploaded['builds/' + LOCK['build_id'] + '/' + arch + '/' + name])
+
+    def test_a_release_whose_apks_differ_or_are_extra_fails(self):
+        for change, error in [('differ', 'lacks'), ('extra', 'no build made')]:
+            with self.subTest(change), tempfile.TemporaryDirectory() as directory:
+                assets = self.draft(Path(directory))
+                names = json.loads((assets / 'release.json').read_text())['sha256']
+                if change == 'differ':
+                    (assets / publish.asset('linux-werewolf-7.2.11-r1.apk', 'x86_64')).write_bytes(b'other')
+                else:
+                    (assets / 'stray-1-r0.x86_64.apk').write_bytes(b'stray')
+                    names = {**names, 'stray-1-r0.x86_64.apk': ''}
+                self.manifest(assets, names)
+                with self.assertRaisesRegex(ValueError, error):
+                    self.publish(assets)
+
+
 class Release(unittest.TestCase):
     def test_draft_lookup_paginates_and_keeps_api_errors(self):
         draft = {'tag_name': 'build-x', 'draft': True, 'assets': []}
@@ -184,7 +241,8 @@ class Release(unittest.TestCase):
             root = Path(directory)
             for arch in publish.ARCHES:
                 (root / 'artifacts' / ('linux-werewolf-' + arch)).mkdir(parents=True)
-                (root / 'artifacts' / ('linux-werewolf-' + arch) / 'a.apk').write_bytes(arch.encode())
+                (root / 'artifacts' / ('linux-werewolf-' + arch) / arch).mkdir()
+                (root / 'artifacts' / ('linux-werewolf-' + arch) / arch / 'a-1-r1.apk').write_bytes(arch.encode())
             current, uploaded, calls, fail = None, {}, [], [True]
 
             def run(*args):
@@ -215,6 +273,10 @@ class Release(unittest.TestCase):
                 publish.stage(root / 'artifacts', root / 'assets', LOCK, 'build-x')
                 self.assertEqual(1, sum(args[:3] == ('gh', 'api', '--method') for args in calls))
                 self.assertEqual('release.json', Path(calls[-1][-1]).name)
+                # Each arch's APKs are assets of their own, named apart, and in the manifest.
+                self.assertEqual(b'aarch64', uploaded['a-1-r1.aarch64.apk'])
+                self.assertEqual(b'x86_64', uploaded['a-1-r1.x86_64.apk'])
+                self.assertIn('a-1-r1.x86_64.apk', json.loads(uploaded['release.json'])['sha256'])
                 uploaded['linux-werewolf-x86_64.tar.gz'] = b'conflicting bytes'
                 with self.assertRaisesRegex(ValueError, 'different'):
                     publish.stage(root / 'artifacts', root / 'assets', LOCK, 'build-x')

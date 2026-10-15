@@ -2,8 +2,10 @@
 """Publish both native builds to an immutable R2 snapshot, the stable repository and GitHub.
 
 status:  build, publish or complete, for the captured inputs' release tag
-stage:   validate both artifacts and stage them in a draft GitHub release
+stage:   validate both artifacts and stage them, and each APK, in a draft GitHub release
 publish: validate the draft again, sign the stable index, upload, and make the release public
+
+GitHub and R2 carry the same APK bytes; publish refuses a draft whose copies differ.
 """
 import argparse
 import gzip
@@ -13,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -152,16 +155,26 @@ def status(tag):
     return 'publish' if current['draft'] else 'complete'
 
 
+def asset(apk, arch):
+    """An APK's name among a release's assets, which both arches' share: NAME-VERSION.ARCH.apk."""
+    return apk.removesuffix('.apk') + '.' + arch + '.apk'
+
+
 def stage(artifacts, assets, lock, tag):
     assets.mkdir(parents=True, exist_ok=True)
-    names = {arch: 'linux-werewolf-' + arch + '.tar.gz' for arch in ARCHES}
-    for arch, name in names.items():
-        validate(artifacts / ('linux-werewolf-' + arch), arch, lock, os.environ['GITHUB_SHA'])
-        archive(artifacts / ('linux-werewolf-' + arch), assets / name)
+    names = []
+    for arch in ARCHES:
+        directory = artifacts / ('linux-werewolf-' + arch)
+        validate(directory, arch, lock, os.environ['GITHUB_SHA'])
+        names.append('linux-werewolf-' + arch + '.tar.gz')
+        archive(directory, assets / names[-1])
+        for apk in sorted((directory / arch).glob('*.apk')):
+            names.append(asset(apk.name, arch))
+            shutil.copyfile(apk, assets / names[-1])
     manifest = {'build_id': lock['build_id'], 'version': lock['version'] + '-r' + str(lock['revision']),
                 'source_sha': os.environ['GITHUB_SHA'], 'run_number': int(os.environ['GITHUB_RUN_NUMBER']),
                 'repository': PUBLIC + 'builds/' + lock['build_id'],
-                'sha256': {name: sha256(assets / name) for name in sorted(names.values())}}
+                'sha256': {name: sha256(assets / name) for name in sorted(names)}}
     (assets / 'SHA256SUMS').write_text(''.join(f'{d}  {n}\n' for n, d in manifest['sha256'].items()))
     (assets / 'release.json').write_text(json.dumps(manifest, indent=2) + '\n')
     current = release(tag)
@@ -179,7 +192,7 @@ def stage(artifacts, assets, lock, tag):
         raise ValueError('publish: refusing to change public release ' + tag)
     existing = {a['name'] for a in current['assets']}
     # The manifest goes last: its presence marks a complete draft.
-    for path in [assets / n for n in sorted(names.values())] + [assets / 'SHA256SUMS', assets / 'release.json']:
+    for path in [assets / n for n in sorted(names)] + [assets / 'SHA256SUMS', assets / 'release.json']:
         if path.name not in existing:
             run('gh', 'release', 'upload', tag, str(path))
             continue
@@ -255,20 +268,27 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
     names = {'linux-werewolf-' + arch + '.tar.gz': arch for arch in ARCHES}
     if manifest['build_id'] != lock['build_id'] or not re.fullmatch('[0-9a-f]{40}', manifest['source_sha']):
         raise ValueError('publish: release manifest is for other inputs')
-    if set(manifest['sha256']) != set(names):
+    if not set(names) <= set(manifest['sha256']):
         raise ValueError('publish: both native architectures are required')
+    for name, digest in manifest['sha256'].items():
+        if sha256(assets / name) != digest:
+            raise ValueError('publish: ' + name + ' does not match the release manifest')
+    apks = set(manifest['sha256']) - set(names)
     snapshot = 'builds/' + lock['build_id'] + '/'
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
         roots, indexes = {}, {}
         # Validate and sign everything before the first upload.
         for name, arch in names.items():
-            if sha256(assets / name) != manifest['sha256'][name]:
-                raise ValueError('publish: ' + name + ' does not match the release manifest')
             roots[arch] = work / arch
             with tarfile.open(assets / name) as tar:
                 tar.extractall(roots[arch], filter='data')
             validate(roots[arch], arch, lock, manifest['source_sha'])
+            # The release's own APKs are the ones R2 gets, byte for byte.
+            for apk in (roots[arch] / arch).glob('*.apk'):
+                if manifest['sha256'].get(asset(apk.name, arch)) != sha256(apk):
+                    raise ValueError('publish: the release lacks ' + asset(apk.name, arch) + ' as built')
+                apks.discard(asset(apk.name, arch))
             previous = {}
             published = work / (arch + '-published.tar.gz')
             if fetch(arch + '/APKINDEX.tar.gz', published):
@@ -278,6 +298,8 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
             index.write_bytes(signed_index(merged, key))
             authenticated(index, TRUST)
             indexes[arch] = index, added
+        if apks:
+            raise ValueError('publish: the release holds APKs no build made: ' + ', '.join(sorted(apks)))
         for arch, root in roots.items():
             # Objects before the index that names them: readers never see a partial index.
             for apk in sorted((root / arch).glob('*.apk')):

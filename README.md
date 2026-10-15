@@ -73,9 +73,10 @@ GitHub Actions checks kernel.org hourly. A release whose inputs are unpublished 
 natively on x86_64 and aarch64; both must boot the probe before
 [scripts/publish.py](scripts/publish.py) stages a draft release, then publishes to R2
 `apk/kernel/`: an immutable snapshot `builds/<input-hash>/` and the stable repository
-`https://dist.werewolf-linux.org/apk/kernel` machines follow. Every published APK is
-kept; only the index is re-signed, after the previous one verifies. The release key is
-werewolf's `WEREWOLF_PACKAGES_KEY`; `release/packages.pub` must match it.
+`https://dist.werewolf-linux.org/apk/kernel` machines follow. The GitHub release carries
+each APK too, as `NAME-VERSION.ARCH.apk`, the same bytes R2 serves. Every published APK
+is kept; only the index is re-signed, after the previous one verifies. The release key
+is werewolf's `WEREWOLF_PACKAGES_KEY`; `release/packages.pub` must match it.
 
 ## Drawbacks
 

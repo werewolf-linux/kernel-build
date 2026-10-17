@@ -92,6 +92,7 @@ static int untrusted_policy_refused(void)
 int main(void)
 {
 	struct utsname u = { 0 };
+	unsigned long aio = 0;
 	size_t n;
 
 	mount("proc", "/proc", "proc", 0, NULL);
@@ -118,6 +119,10 @@ int main(void)
 	      open("/sys/kernel/security/ipe/policies/werewolf_boot", O_RDONLY) < 0);
 	check("IPE refuses a policy signed by any other key", untrusted_policy_refused());
 	check("running config is readable", open("/proc/config.gz", O_RDONLY) >= 0);
+	check("IPv4 multicast reception is available", open("/proc/net/igmp", O_RDONLY) >= 0);
+	check("own memory accounting is readable", strstr(slurp("/proc/self/smaps"), "Size:") != NULL);
+	check("native AIO contexts work", syscall(__NR_io_setup, 1, &aio) == 0 &&
+	      syscall(__NR_io_destroy, aio) == 0);
 
 	say(failed ? "FAIL" : "PASS", u.release);
 	reboot(LINUX_REBOOT_CMD_POWER_OFF);

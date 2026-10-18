@@ -65,13 +65,13 @@ class Holding(unittest.TestCase):
 
 
 class Committed(unittest.TestCase):
-    def test_bhyve_legacy_virtio_is_built_in_on_x86_only(self):
+    def test_bhyve_legacy_virtio_is_built_in(self):
         symbol = 'CONFIG_VIRTIO_PCI_LEGACY'
-        self.assertEqual('y', config.policy('x86_64')[symbol])
         for arch in config.KERNEL_ARCH:
             with self.subTest(arch=arch):
+                self.assertEqual('y', config.policy(arch)[symbol])
                 text = (ROOT / 'config' / (arch + '.config')).read_text()
-                self.assertEqual('y' if arch == 'x86_64' else None, config.values(text).get(symbol))
+                self.assertEqual('y', config.values(text).get(symbol))
 
     def test_both_committed_configs_hold_the_lists_and_the_deny_list(self):
         for arch in config.KERNEL_ARCH:

@@ -161,6 +161,20 @@ def validate(directory, arch, lock, source_sha):
     return record
 
 
+def kernel_versions(names):
+    return {(version(m[1]), int(m[2])) for m in map(re.compile(r'linux-werewolf-([0-9.]+)-r([0-9]+)\.apk').fullmatch,
+                                                    names) if m}
+
+
+def refuse_older(lock, kernels):
+    ours = version(lock['version']), lock['revision']
+    if kernels and max(kernels) > ours:
+        theirs = max(kernels)
+        raise ValueError('publish: linux-werewolf ' + lock['version'] + '-r' + str(lock['revision']) +
+                         ' is older than the published ' + '.'.join(map(str, theirs[0])) + '-r' + str(theirs[1]) +
+                         '; refusing to go back')
+
+
 def published():
     """The kernels in the stable repository machines follow, as (version, revision)."""
     try:
@@ -176,26 +190,27 @@ def published():
         index = Path(directory) / 'APKINDEX.tar.gz'
         index.write_bytes(data)
         names = stanzas(authenticated(index, TRUST))
-    return {(version(m[1]), int(m[2])) for m in map(re.compile(r'linux-werewolf-([0-9.]+)-r([0-9]+)\.apk').fullmatch,
-                                                    names) if m}
+    return kernel_versions(names)
 
 
 def status(tag, lock):
     current = release(tag)
-    if current is not None and 'release.json' in {a['name'] for a in current['assets']}:
-        return 'publish' if current['draft'] else 'complete'
+    complete = current is not None and 'release.json' in {a['name'] for a in current['assets']}
+    if complete and not current['draft']:
+        return 'complete'
     if current is not None and not current['draft']:
         raise ValueError('publish: public release ' + tag + ' has no completion manifest')
     # A new build of a published version would never reach a machine: the stable
     # repository keeps a version's first build. Nor may kernel.org walk us back.
+    kernels = published()
+    refuse_older(lock, kernels)
+    if complete:
+        return 'publish'
     ours, full = (version(lock['version']), lock['revision']), lock['version'] + '-r' + str(lock['revision'])
-    for theirs in published():
+    for theirs in kernels:
         if theirs == ours:
             raise ValueError('publish: linux-werewolf ' + full + ' is already published, built from other inputs; '
                              'increment policy.json revision to ship this build')
-        if theirs > ours:
-            raise ValueError('publish: linux-werewolf ' + full + ' is older than the published ' +
-                             '.'.join(map(str, theirs[0])) + '-r' + str(theirs[1]) + '; refusing to go back')
     return 'build'
 
 
@@ -349,6 +364,8 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
             published = work / (arch + '-published.tar.gz')
             if fetch(arch + '/APKINDEX.tar.gz', published):
                 previous = stanzas(authenticated(published, TRUST))
+            # Recheck the bucket for both arches: discovery may be old or a draft resumed.
+            refuse_older(lock, kernel_versions(previous))
             merged, added = merge(previous, stanzas(authenticated(roots[arch] / arch / 'APKINDEX.tar.gz', TRUST)))
             index = work / (arch + '-APKINDEX.tar.gz')
             index.write_bytes(signed_index(merged, key))

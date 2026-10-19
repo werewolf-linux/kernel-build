@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture kernel.org's newest release of the policy's moniker without maintaining a version.
+"""Capture kernel.org's newest final release for the policy without maintaining a version.
 
 A new series is followed like a point release: the build derives its config from the
 lists, where each option the series adds starts off (linux.yaml).
@@ -23,12 +23,15 @@ VERSION = re.compile(r'[0-9]+\.[0-9]+(?:\.[0-9]+)?')
 
 
 def version(text):
-    return tuple(int(part) for part in text.split('.'))
+    parts = tuple(int(part) for part in text.split('.'))
+    return parts + (0,) * (3 - len(parts))
 
 
 def latest(releases, moniker):
+    # A final mainline release is stable before kernel.org relabels it.
+    monikers = {moniker, 'mainline'} if moniker == 'stable' else {moniker}
     candidates = [r for r in releases['releases']
-                  if r['moniker'] == moniker and not r['iseol'] and VERSION.fullmatch(r['version'])]
+                  if r['moniker'] in monikers and not r['iseol'] and VERSION.fullmatch(r['version'])]
     if not candidates:
         raise ValueError('No supported ' + moniker + ' release on kernel.org')
     release = max(candidates, key=lambda r: version(r['version']))
@@ -124,7 +127,7 @@ def main():
     fetch(release['pgp'], signature)
     signer = verified(tarball, signature)
     lock = capture(release, tarball, signer)
-    print('refresh: Linux', lock['version'], '(' + moniker + ', released', lock['released'] + ')',
+    print('refresh: Linux', lock['version'], '(' + lock['moniker'] + ', released', lock['released'] + ')',
           'signed by', SIGNERS[signer], 'build', lock['build_id'])
 
 

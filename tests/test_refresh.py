@@ -35,6 +35,25 @@ class Latest(unittest.TestCase):
         releases = {'releases': [entry('stable', '7.2.12'), entry('stable', '7.3.1'), entry('longterm', '6.18.60')]}
         self.assertEqual('7.3.1', refresh.latest(releases, 'stable')['version'])
 
+    def test_final_mainline_is_followed_before_it_is_relabelled_stable(self):
+        releases = {'releases': [entry('stable', '7.2.11'), entry('mainline', '7.3')]}
+        selected = refresh.latest(releases, 'stable')
+        self.assertEqual('7.3', selected['version'])
+        self.assertEqual('mainline', selected['moniker'])
+
+    def test_next_rc_does_not_displace_the_new_stable_series(self):
+        releases = {'releases': [entry('stable', '7.3.1'), entry('stable', '7.2.12'),
+                                 entry('mainline', '7.4-rc1'), entry('linux-next', 'next-20261019')]}
+        self.assertEqual('7.3.1', refresh.latest(releases, 'stable')['version'])
+
+    def test_final_mainline_does_not_change_longterm_policy(self):
+        releases = {'releases': [entry('mainline', '7.3'), entry('longterm', '6.18.57')]}
+        self.assertEqual('6.18.57', refresh.latest(releases, 'longterm')['version'])
+
+    def test_base_release_and_point_zero_compare_equally(self):
+        self.assertEqual(refresh.version('7.3'), refresh.version('7.3.0'))
+        self.assertLess(refresh.version('7.3'), refresh.version('7.3.1'))
+
     def test_an_unexpected_date_stops(self):
         odd = entry('stable', '7.2.11')
         odd['released']['isodate'] = '2026-10-15"\nx'

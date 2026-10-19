@@ -229,6 +229,29 @@ class Publication(Validation):
                 with self.assertRaisesRegex(ValueError, error):
                     self.publish(assets)
 
+    def test_an_old_draft_cannot_publish_over_a_newer_kernel_on_either_arch(self):
+        for advanced in publish.ARCHES:
+            with self.subTest(arch=advanced), tempfile.TemporaryDirectory() as directory:
+                assets = self.draft(Path(directory))
+                newer = self.signed(member({'APKINDEX':
+                    f'P:linux-werewolf\nV:7.3-r1\nA:{advanced}\n'.encode()}))
+
+                def fetch(key, destination):
+                    if key == advanced + '/APKINDEX.tar.gz':
+                        destination.write_bytes(newer)
+                        return True
+                    return False
+
+                with patch.object(publish, 'TRUST', self.public), \
+                        patch.object(publish, 'recipe', return_value='recipe'), \
+                        patch.object(publish, 'run', return_value='') as run, \
+                        patch.object(publish, 'fetch', side_effect=fetch), \
+                        patch.object(publish, 'upload') as upload, \
+                        self.assertRaisesRegex(ValueError, 'refusing to go back'):
+                    publish.publish(assets, LOCK, 'old-draft', key=self.private)
+                upload.assert_not_called()
+                self.assertFalse(any(call.args[:3] == ('gh', 'release', 'edit') for call in run.call_args_list))
+
 
 class Release(unittest.TestCase):
     def test_draft_lookup_paginates_and_keeps_api_errors(self):
@@ -264,6 +287,20 @@ class Release(unittest.TestCase):
                         publish.status('build-x', LOCK)
                 else:
                     self.assertEqual('build', publish.status('build-x', LOCK))
+
+    def test_a_complete_draft_cannot_bypass_the_downgrade_guard(self):
+        draft = {'draft': True, 'assets': [{'name': 'release.json'}]}
+        for kernels in ({((7, 3, 0), 1)}, {((7, 2, 11), 2)}):
+            with self.subTest(kernels=kernels), patch.object(publish, 'release', return_value=draft), \
+                    patch.object(publish, 'published', return_value=kernels), \
+                    self.assertRaisesRegex(ValueError, 'refusing to go back'):
+                publish.status('build-x', LOCK)
+
+    def test_a_partially_published_draft_can_resume_at_the_same_version(self):
+        draft = {'draft': True, 'assets': [{'name': 'release.json'}]}
+        with patch.object(publish, 'release', return_value=draft), \
+                patch.object(publish, 'published', return_value={((7, 2, 11), 1)}):
+            self.assertEqual('publish', publish.status('build-x', LOCK))
 
     def test_archives_do_not_depend_on_extraction_times(self):
         with tempfile.TemporaryDirectory() as directory:

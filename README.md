@@ -2,9 +2,10 @@
 
 ## Summary
 
-The kernel werewolf virtual machines boot: kernel.org's newest `stable` release, built
+The kernel werewolf virtual machines boot: kernel.org's newest final release, built
 with exactly the options in [config/](config/) and nothing else, published as signed
 APKs for x86_64 and aarch64 within hours of each release.
+The stable policy includes final `mainline` releases and excludes release candidates.
 
 ## Background
 
@@ -112,5 +113,6 @@ Nothing published is replaced.
 Drift fails closed: a list line a new release no longer honours, the deny list, or the
 boot probe. A failed build leaves the previous release in place; a complete draft
 lets publication resume without rebuilding. Machines keep the previous kernel.
+Discovery and publication reject older versions and revisions, including resumed drafts.
 
 [design]: https://github.com/werewolf-linux/werewolf/blob/main/docs/design/custom-kernel.md
